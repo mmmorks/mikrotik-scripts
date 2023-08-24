@@ -1,0 +1,101 @@
+:global timeoutLTE 300
+
+# Wait for LTE to initialize for maximum "timeoutLTE" seconds
+:local i 0
+:local isLTEinit false
+:while ($i<$timeoutLTE) do={
+    :foreach n in=[/interface lte find] do={:set $isLTEinit true}
+    :if ($isLTEinit=true) do={
+        :set $i $timeoutLTE
+    }
+    :set $i ($i+1)
+    :delay 1s
+}
+
+# Check if LTE is initialized, or try power-reset the modem
+:if ($isLTEinit!=true) do={ 
+    :log error "USB did not initialize"
+}
+
+# Change the following two lines to match your ISP
+:local ipv6prefix "2602:"
+:local 6in4tunnel "205.171.2.64"
+:local ipv6localinterface [/interface list member get [:pick [find list=LAN] 0] interface]
+:local ipv6USBinterface "usb1"
+:local WANinterface [/interface list member get [:pick [find list=WAN] 1] interface]
+
+:local WANaddress [/ip address get [find interface=$WANinterface] address]
+:local WANaddress [:pick $WANaddress 0 [:find $WANaddress /]]
+
+:if ([:len $WANaddress] = 0) do={
+    :log error ($LogPrefix . "Could not get IP for interface " . $WANinterface)
+    :error ("Could not get IP for interface " . $WANinterface)
+}
+
+:local IPv6temp [:toip6 ("1::" . $WANaddress)]
+
+# Shift the colon
+:local IPv4hex [([:pick $IPv6temp 3 5] . ":" . [:pick $IPv6temp 5 7] . [:pick $IPv6temp 8 10] . ":" . [:pick $IPv6temp 10 12])]
+:local IPv6addr [($ipv6prefix . $IPv4hex ."00::1/64")]
+:local IPv6addrLoc [($ipv6prefix . $IPv4hex ."01::1/64")]
+:local IPv6addrUSB [($ipv6prefix . $IPv4hex ."02::1/64")]
+
+# 6to4 interface
+:local 6to4id [/interface 6to4 find where name="6rd"]
+:if ($6to4id!="") do={
+    :local 6to4addr [/interface 6to4 get $6to4id local-address]
+# Change the remote-address in the following to match your ISP's 6rd gateway
+    :if ($6to4addr != $WANaddress) do={
+        :log warning "Updating local-address for 6to4 tunnel '6rd' from '$6to4addr' to '$WANaddress'."
+        /interface 6to4 set [find name="6rd"] local-address=$WANaddress
+    }
+} else={
+    :log warning "Creating 6to4 interface '6rd'."
+    /interface 6to4 add !keepalive local-address=$WANaddress mtu=1472 name="6rd" remote-address=$6in4tunnel
+}
+
+# ipv6 for uplink
+:local IPv6addrnumber [/ipv6 address find where comment="6rd" and interface="6rd"]
+:if ($IPv6addrnumber!="") do={
+    :local oldip ([/ipv6 address get $IPv6addrnumber address])
+    :if ($oldip != $IPv6addr) do={
+        :log warning "Updating 6rd IPv6 from '$oldip' to '$IPv6addr'."
+        /ipv6 address set number=$IPv6addrnumber address=$IPv6addr disabled=no
+    }
+} else={
+    :log warning "Setting up 6rd IPv6 '$IPv6addr' to '6rd'. "
+    /ipv6 address add address=$IPv6addr interface="6rd" comment="6rd" advertise=no
+}
+
+#ipv6 for local
+:local IPv6addrnumberLocal [/ipv6 address find where comment=("6rd_local") and interface=$ipv6localinterface]
+:if ($IPv6addrnumberLocal!="") do={
+    :local oldip ([/ipv6 address get $IPv6addrnumberLocal address])
+    :if ($oldip != $IPv6addrLoc) do={
+        :log warning "Updating 6rd LOCAL IPv6 from '$oldip' to '$IPv6addrLoc'."
+        /ipv6 address set number=$IPv6addrnumberLocal address=$IPv6addrLoc disabled=no
+    }
+} else={
+    :log warning "Setting up 6rd LOCAL IPv6 '$IPv6addrLoc' na '$ipv6localinterface'. "
+    /ipv6 address add address=$IPv6addrLoc interface=$ipv6localinterface comment="6rd_local" advertise=yes
+}
+
+#ipv6 for usb
+:local IPv6addrnumberUSB [/ipv6 address find where comment=("6rd_usb") and interface=$ipv6USBinterface]
+:if ($IPv6addrnumberUSB!="") do={
+    :local oldip ([/ipv6 address get $IPv6addrnumberUSB address])
+    :if ($oldip != $IPv6addrUSB) do={
+        :log warning "Updating 6rd USB IPv6 from '$oldip' to '$IPv6addrUSB'."
+        /ipv6 address set number=$IPv6addrnumberUSB address=$IPv6addrUSB disabled=no
+    }
+} else={
+    :log warning "Setting up 6rd USB IPv6 '$IPv6addrUSB' na '$ipv6USBinterface'. "
+    /ipv6 address add address=$IPv6addrUSB interface=$ipv6USBinterface comment="6rd_usb" advertise=yes
+}
+
+#ipv6 route
+:local routa [/ipv6 route find where dst-address="2000::/3" and gateway="6rd"]
+:if ($routa="") do={
+    :log warning "Setting IPv6 route '2000::/3' pres '6rd'. "
+    /ipv6 route add distance=1 dst-address="2000::/3" gateway="6rd"
+}

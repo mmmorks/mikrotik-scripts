@@ -1,0 +1,11 @@
+## Wait for internet connection established if this is a reboot
+:delay 90s;
+
+{
+    :local result [/tool fetch http-method=get https://bynb0huh81.execute-api.us-west-2.amazonaws.com/default/heartbeat-to-cloudwatch as-value output=user];
+    :if ($result->"status" = "finished") do={
+        :log info ("Heartbeat request succeeded.");
+    } else={
+        :log error ("Heartbeat request failed!");
+    }
+}

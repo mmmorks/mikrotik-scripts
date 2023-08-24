@@ -1,0 +1,34 @@
+## Check for update
+/system package update
+set channel=stable
+check-for-updates
+
+## Wait on slow connections
+:delay 15s;
+
+## Important note: "installed-version" was "current-version" on older Router OSes
+:if ([get installed-version] != [get latest-version]) do={ 
+
+   ## New version of RouterOS available, let's upgrade
+   :log info ("Upgrading RouterOS on router $[/system identity get name] from $[/system package update get installed-version] to $[/system package update get latest-version] (channel:$[/system package update get channel])")     
+   
+   ## "install" command is reincarnation of the "upgrade" command - doing exactly the same but under a different name
+   install
+} else={
+   ## RouterOS latest, let's check for updated firmware
+    :log info ("No RouterOS upgrade found, checking for HW upgrade...")
+
+   /system routerboard
+   :if ( [get current-firmware] != [get upgrade-firmware]) do={ 
+      ## New version of firmware available, let's upgrade
+      :log info ("Upgrading firmware on router $[/system identity get name] from $[/system routerboard get current-firmware] to $[/system routerboard get upgrade-firmware]")
+
+      upgrade
+
+      ## Wait for upgrade, then reboot
+      :delay 180s;
+      /system reboot
+   } else={
+   :log info ("No Router HW upgrade found")
+   }
+}
